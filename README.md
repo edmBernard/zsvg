@@ -41,8 +41,8 @@ pub fn main(init: std.process.Init) !void {
     try doc.addCircle(
         .{ .center = .{ .x = 100, .y = 100 }, .radius = 40 },
         .{
-            .fill = .{ .color = .fromHex(0x8AB4F8) },
-            .stroke = .{ .color = .fromHex(0xFFFFFF), .width = 2 },
+            .fill = .hex(0x8AB4F8, 0.9),
+            .stroke = .solidHex(0xFFFFFF, 2),
         },
     );
 
@@ -51,9 +51,9 @@ pub fn main(init: std.process.Init) !void {
 }
 ```
 
-Geometry shapes and `Fill`/`Stroke` are plain structs — construct them with
-`.{ .field = value }` syntax. Only `Color` ships with helper constructors
-(`fromRgb`, `fromHex`, `withOpacity`) because they do real decoding work.
+Geometry shapes are plain structs — build them with `.{ .field = value }`
+syntax. `Color`, `Fill`, and `Stroke` ship with small helper constructors
+(`rgb`, `fromHex`, `solid`, `solidHex`, `hex`) so common cases stay terse.
 
 ## API tour
 
@@ -74,21 +74,24 @@ std.debug.print("point = {f}\n", .{zsvg.Point{ .x = 1, .y = 2 }});
 
 ### `svg` — SVG document builder
 
-- `Color { r, g, b, opacity }` with `fromRgb`, `fromHex`, `withOpacity`,
-  and `add`/`sub`/`scale` for color interpolation (saturating at `u8` bounds)
-- `Fill` wraps a `Color`; `Stroke` wraps a `Color` + width
+- `Color { r, g, b }` with `rgb`, `fromHex`, and `add`/`sub`/`scale` for
+  color interpolation (saturating at `u8` bounds)
+- `Fill { color, opacity = 1 }` with `init`, `solid`, `hex`, `solidHex`
+- `Stroke { color, width, opacity = 1 }` with `init`, `solid`, `hex`,
+  `solidHex`
 - `Style { fill: ?Fill = null, stroke: ?Stroke = null }` — the paint
-  configuration passed to `addLine`/`addCircle`/`addPath`. Both fields
-  default to `null`, so you only set what you need:
+  configuration passed to `addLine`/`addCircle`/`addShape`/`addPath`. Both
+  fields default to `null`, so you only set what you need:
   `.{ .stroke = ... }`, `.{ .fill = ... }`, or both.
 - `Document` — owns an internal buffer and exposes:
   - **Output:** `writeTo(writer)`, `toOwnedString(allocator)`,
     `save(allocator, io, path)`
-  - **Shapes:** `addLine(shape, Style)`, `addBezier(shape, Stroke)`,
-    `addCircle(shape, Style)`, `addText(text, position, Fill)`, `addRaw`
-  - **Generic:** `addPath(shapes, Style, predicate)` — comptime dispatches
-    on element type (`Line`, `Triangle`, `Quadrilateral`, `Bezier`) and
-    accepts either a filtering function or `zsvg.keep_all`
+  - **Shapes:** `addLine(line, Style)`, `addCircle(circle, Style)`,
+    `addBezier(bezier, Stroke)`, `addText(text, position, Fill)`, `addRaw`
+  - **Generic:** `addShape(shape, Style)` — comptime dispatches on a single
+    `Line`, `Triangle`, `Quadrilateral`, or `Bezier`
+  - **Batch:** `addPath(shapes, Style)` — same comptime dispatch over a
+    slice/array of one of those shape types
 
 The primary API is writer-based (`writeTo`); `toOwnedString` and `save` are
 convenience wrappers on top.
@@ -96,20 +99,32 @@ convenience wrappers on top.
 ## Build commands
 
 ```sh
-zig build test              # run all unit tests
-zig build examples          # build + run all examples
-zig build example-shapes    # run just the shapes example
-zig build example-gradient  # run just the gradient example
+zig build test                    # run all unit tests
+zig build examples                # build + run all examples
+zig build example-shapes          # run just the shapes example
+zig build example-gradient        # run just the gradient example
+zig build example-bezier_curves   # run just the bezier flower example
 ```
 
-Example output is written to `zig-out/` (e.g. `zig-out/shapes.svg`).
+Each example writes its output into `zig-out/` (e.g. `zig-out/shapes.svg`).
 
 ## Examples
 
-- `examples/shapes.zig` — one canvas with a line, triangle, quadrilateral,
-  stroked translucent circle, cubic bezier, and text.
-- `examples/gradient.zig` — a 10×10 grid of circles with colors linearly
-  interpolated between two endpoints, showcasing `Color` arithmetic.
+- `examples/basic.zig` — two overlapping translucent circles, the smallest
+  end-to-end snippet.
+- `examples/basic_shapes.zig` — sampler of every primitive plus a row of
+  translucent circles.
+- `examples/shapes.zig` — line, triangle, quadrilateral, stroked
+  translucent circle, cubic bezier, and text on one canvas.
+- `examples/bezier_curves.zig` — 12-petal flower built by rotating a
+  single cubic bezier around a center.
+- `examples/paths.zig` — `addPath` over an array of triangles plus a
+  standalone bezier wave.
+- `examples/gradient.zig` — 10×10 grid of circles with colors linearly
+  interpolated between two endpoints, showcasing `Color` arithmetic and
+  streaming straight to a file with `writeTo`.
+- `examples/text.zig` — text, line, and `addRaw` for inline SVG.
+- `examples/save.zig` — minimal `Document.save` usage.
 
 ## License
 
