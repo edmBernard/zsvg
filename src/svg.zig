@@ -138,6 +138,47 @@ pub const Style = struct {
 // -----------------------------------------------------------------------------
 // Internal streaming helpers
 
+fn isPointCollectionType(comptime T: type) bool {
+    return switch (@typeInfo(T)) {
+        .array => |array| array.child == Point,
+        .pointer => |pointer| switch (pointer.size) {
+            .slice => pointer.child == Point,
+            .one => switch (@typeInfo(pointer.child)) {
+                .array => |array| array.child == Point,
+                else => false,
+            },
+            else => false,
+        },
+        else => false,
+    };
+}
+
+fn writeClosedPointPath(writer: *Writer, points: []const Point) Writer.Error!void {
+    if (points.len == 0) return;
+
+    try writer.print("M {d} {d}", .{ points[0].x, points[0].y });
+    for (points[1..]) |point| {
+        try writer.print(" L {d} {d}", .{ point.x, point.y });
+    }
+    try writer.writeAll(" Z");
+}
+
+fn writeClosedPointCollectionPath(writer: *Writer, shape: anytype) Writer.Error!void {
+    const T = @TypeOf(shape);
+    switch (@typeInfo(T)) {
+        .array => try writeClosedPointPath(writer, shape[0..]),
+        .pointer => |pointer| switch (pointer.size) {
+            .slice => try writeClosedPointPath(writer, shape),
+            .one => switch (@typeInfo(pointer.child)) {
+                .array => try writeClosedPointPath(writer, shape[0..]),
+                else => unreachable,
+            },
+            else => unreachable,
+        },
+        else => unreachable,
+    }
+}
+
 fn writeShapePath(writer: *Writer, shape: anytype) Writer.Error!void {
     const T = @TypeOf(shape);
     switch (T) {
@@ -165,7 +206,13 @@ fn writeShapePath(writer: *Writer, shape: anytype) Writer.Error!void {
                 p[0].x, p[0].y, p[1].x, p[1].y, p[2].x, p[2].y, p[3].x, p[3].y,
             });
         },
-        else => @compileError("writeShapePath: unsupported shape " ++ @typeName(T)),
+        else => {
+            if (comptime isPointCollectionType(T)) {
+                try writeClosedPointCollectionPath(writer, shape);
+                return;
+            }
+            @compileError("writeShapePath: unsupported shape " ++ @typeName(T));
+        },
     }
 }
 
@@ -477,6 +524,43 @@ test "Document addShape works for Triangle" {
     const svg = try doc.toOwnedString(testing.allocator);
     defer testing.allocator.free(svg);
     try testing.expect(std.mem.indexOf(u8, svg, "M 5 10 L 0 0 L 10 0 Z") != null);
+}
+
+
+test "Document addShape works for point arrays" {
+    var doc: Document = .init(testing.allocator, 100, 100, .rgb(0, 0, 0));
+    defer doc.deinit();
+
+    const polygon = [_]Point{
+        .{ .x = 0, .y = 0 },
+        .{ .x = 10, .y = 0 },
+        .{ .x = 8, .y = 5 },
+        .{ .x = 10, .y = 10 },
+        .{ .x = 0, .y = 10 },
+    };
+    try doc.addShape(polygon, .{ .fill = .solidHex(0xFF0000) });
+
+    const svg = try doc.toOwnedString(testing.allocator);
+    defer testing.allocator.free(svg);
+    try testing.expect(std.mem.indexOf(u8, svg, "M 0 0 L 10 0 L 8 5 L 10 10 L 0 10 Z") != null);
+}
+
+test "Document addShape works for point slices" {
+    var doc: Document = .init(testing.allocator, 100, 100, .rgb(0, 0, 0));
+    defer doc.deinit();
+
+    const polygon = [_]Point{
+        .{ .x = 2, .y = 1 },
+        .{ .x = 9, .y = 1 },
+        .{ .x = 6, .y = 6 },
+        .{ .x = 9, .y = 9 },
+        .{ .x = 2, .y = 9 },
+    };
+    try doc.addShape(polygon[0..], .{ .fill = .solidHex(0x00FF00) });
+
+    const svg = try doc.toOwnedString(testing.allocator);
+    defer testing.allocator.free(svg);
+    try testing.expect(std.mem.indexOf(u8, svg, "M 2 1 L 9 1 L 6 6 L 9 9 L 2 9 Z") != null);
 }
 
 test "Document writeTo matches toOwnedString" {
