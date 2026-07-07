@@ -32,7 +32,7 @@ pub fn main(init: std.process.Init) !void {
         .{ .x = 180, .y = 110 },
         .{ .x = 280, .y = 150 },
     } };
-    try doc.addBezier(wave, .solidHex(0xfe5f55, 4));
+    try doc.addBezier(wave, .{ .stroke = .solidHex(0xfe5f55, 4) });
 
     try doc.save(arena, io, "zig-out/paths.svg");
     std.debug.print("wrote zig-out/paths.svg\n", .{});

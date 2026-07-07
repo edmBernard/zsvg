@@ -46,10 +46,10 @@ pub fn main(init: std.process.Init) !void {
             .{ .x = 260, .y = 300 },
             .{ .x = 380, .y = 170 },
         } },
-        .solidHex(0xC58AF9, 2),
+        .{ .stroke = .solidHex(0xC58AF9, 2) },
     );
 
-    try doc.addText("zsvg demo", .{ .x = 150, .y = 290 }, .solidHex(0xFFFFFF));
+    try doc.addText("zsvg demo", .{ .x = 150, .y = 290 }, .{ .fill = .solidHex(0xFFFFFF) });
 
     try doc.save(arena, io, "zig-out/shapes.svg");
     std.debug.print("wrote zig-out/shapes.svg\n", .{});

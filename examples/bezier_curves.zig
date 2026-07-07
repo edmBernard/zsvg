@@ -23,21 +23,22 @@ pub fn main(init: std.process.Init) !void {
     for (0..n_petals) |i| {
         const fi: f32 = @floatFromInt(i);
         const angle = fi * (2.0 * std.math.pi / @as(f32, @floatFromInt(n_petals)));
-        const petal = base.rotate(angle).translate(origin);
+        // Rotate about the origin, then translate to the flower center.
+        const petal = base.transform(zsvg.Matrix.translation(origin.x, origin.y).mul(.rotation(angle)));
 
         const hue: f32 = fi / @as(f32, @floatFromInt(n_petals));
         const r: u8 = @intFromFloat(100 + 155 * hue);
         const g: u8 = @intFromFloat(50 + 100 * (1.0 - hue));
         const b: u8 = @intFromFloat(200 - 100 * hue);
 
-        try doc.addBezier(petal, .init(.rgb(r, g, b), 2, 0.8));
+        try doc.addBezier(petal, .{ .stroke = .init(.rgb(r, g, b), 2, 0.8) });
     }
 
     try doc.addCircle(
         .{ .center = origin, .radius = 5 },
         .{ .fill = .solidHex(0xFFFFFF) },
     );
-    try doc.addText("Bezier Flower", .{ .x = 230, .y = 380 }, .solidHex(0xCCCCCC));
+    try doc.addText("Bezier Flower", .{ .x = 230, .y = 380 }, .{ .fill = .solidHex(0xCCCCCC) });
 
     try doc.save(arena, io, "zig-out/bezier_curves.svg");
     std.debug.print("wrote zig-out/bezier_curves.svg\n", .{});

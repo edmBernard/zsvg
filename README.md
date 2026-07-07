@@ -60,11 +60,16 @@ syntax. `Color`, `Fill`, and `Stroke` ship with small helper constructors
 ### `geometry` — allocation-free value types
 
 - `Point { x, y }` with `add`, `sub`, `scale`, `divScalar`, `dot`, `norm`,
-  `rotate(angle)`, `eql` (epsilon-tolerant), `lessThan`
-- `Line`, `Triangle`, `Quadrilateral` — each carries its `vertices` array
-  and exposes `center` and `eql`
-- `Circle { center, radius }`
-- `Bezier` — cubic bezier with four control `points`, supports `rotate(angle)`
+  `eql` (epsilon-tolerant), `lessThan` (strict, sort-safe), `transform(Matrix)`
+- `Matrix` — 2D affine transform matching SVG's `matrix(a b c d e f)`. Build
+  one with `.identity`, `.translation(dx, dy)`, `.rotation(angle)`,
+  `.scaling(sx, sy)`, compose with `.mul` (right-to-left), apply with `.apply`.
+- `Line`, `Triangle`, `Quadrilateral` — each carries its `vertices` array and
+  exposes `center`, `eql`, and `transform(Matrix)`. Vertices are emitted in
+  the order you provide them (no implicit reordering).
+- `Circle { center, radius }` with `eql` and `transform(Matrix)` (radius scaled
+  by the isotropic factor `sqrt(|det|)`).
+- `Bezier` — cubic bezier with four control `points`, supports `transform(Matrix)`.
 
 Every shape also implements `format` so you can print one with `{f}`:
 
@@ -72,26 +77,44 @@ Every shape also implements `format` so you can print one with `{f}`:
 std.debug.print("point = {f}\n", .{zsvg.Point{ .x = 1, .y = 2 }});
 ```
 
+To rotate a shape about the origin and then move it, compose the matrices:
+
+```zig
+const m = zsvg.Matrix.translation(cx, cy).mul(.rotation(angle));
+const moved = shape.transform(m);
+```
+
 ### `svg` — SVG document builder
 
-- `Color { r, g, b }` with `rgb`, `fromHex`, and `add`/`sub`/`scale` for
-  color interpolation (saturating at `u8` bounds)
+- `Color { r, g, b }` with `rgb`, `fromHex`, `add`/`sub`/`scale` (saturating
+  at `u8` bounds), and `lerp(a, b, t)` for interpolation
 - `Fill { color, opacity = 1 }` with `init`, `solid`, `hex`, `solidHex`
-- `Stroke { color, width, opacity = 1 }` with `init`, `solid`, `hex`,
-  `solidHex`
+- `Stroke { color, width, opacity = 1, linecap = .butt, linejoin = .round }`
+  with `init`, `solid`, `hex`, `solidHex`. `linecap` is a `LineCap`
+  (`.butt`/`.round`/`.square`) and `linejoin` a `LineJoin`
+  (`.miter`/`.round`/`.bevel`).
 - `Style { fill: ?Fill = null, stroke: ?Stroke = null }` — the paint
-  configuration passed to `addLine`/`addCircle`/`addShape`/`addPath`. Both
-  fields default to `null`, so you only set what you need:
+  configuration passed to `addLine`/`addCircle`/`addShape`/`addPath`/`addBezier`.
+  Both fields default to `null`, so you only set what you need:
   `.{ .stroke = ... }`, `.{ .fill = ... }`, or both.
-- `Document` — owns an internal buffer and exposes:
+- `TextStyle { fill = opaque black, font_size = 16, font_family = null, anchor = .start }`
+  — passed to `addText`; `anchor` is a `TextAnchor` (`.start`/`.middle`/`.end`).
+  Every field has a default, so `addText(text, pos, .{})` works.
+- `Document` — owns an internal buffer. Construct it with
+  `Document.init(allocator, width, height, background)` where `background` is
+  an `?Color`: pass a color to paint a full-canvas backdrop `<rect>`, or `null`
+  to leave the canvas transparent (no backdrop is emitted). It exposes:
   - **Output:** `writeTo(writer)`, `toOwnedString(allocator)`,
     `save(allocator, io, path)`
   - **Shapes:** `addLine(line, Style)`, `addCircle(circle, Style)`,
-    `addBezier(bezier, Stroke)`, `addText(text, position, Fill)`, `addRaw`
+    `addBezier(bezier, Style)`, `addText(text, position, TextStyle)`, `addRaw`
   - **Generic:** `addShape(shape, Style)` — comptime dispatches on a single
     `Line`, `Triangle`, `Quadrilateral`, or `Bezier`
   - **Batch:** `addPath(shapes, Style)` — same comptime dispatch over a
     slice/array of one of those shape types
+
+`addText` escapes `&`, `<`, and `>` in the supplied string; `addRaw` emits its
+bytes verbatim, so the caller is responsible for well-formed markup there.
 
 The primary API is writer-based (`writeTo`); `toOwnedString` and `save` are
 convenience wrappers on top.

@@ -47,10 +47,10 @@ pub fn main(init: std.process.Init) !void {
     );
 
     // Labels
-    try doc.addText("Circle", .{ .x = 75, .y = 160 }, .solidHex(0x333333));
-    try doc.addText("Line", .{ .x = 250, .y = 170 }, .solidHex(0x333333));
-    try doc.addText("Triangle", .{ .x = 400, .y = 170 }, .solidHex(0x333333));
-    try doc.addText("Quad", .{ .x = 90, .y = 390 }, .solidHex(0x333333));
+    try doc.addText("Circle", .{ .x = 75, .y = 160 }, .{ .fill = .solidHex(0x333333) });
+    try doc.addText("Line", .{ .x = 250, .y = 170 }, .{ .fill = .solidHex(0x333333) });
+    try doc.addText("Triangle", .{ .x = 400, .y = 170 }, .{ .fill = .solidHex(0x333333) });
+    try doc.addText("Quad", .{ .x = 90, .y = 390 }, .{ .fill = .solidHex(0x333333) });
 
     // Multiple circles in a row — demonstrate Color arithmetic.
     for (0..5) |i| {

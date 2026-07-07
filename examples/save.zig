@@ -12,7 +12,7 @@ pub fn main(init: std.process.Init) !void {
         .{ .center = .{ .x = 72, .y = 72 }, .radius = 28 },
         .{ .fill = .solidHex(0xbc4749), .stroke = .solidHex(0x283618, 2) },
     );
-    try doc.addText("saved by zsvg", .{ .x = 118, .y = 76 }, .solidHex(0x283618));
+    try doc.addText("saved by zsvg", .{ .x = 118, .y = 76 }, .{ .fill = .solidHex(0x283618) });
 
     try doc.save(arena, io, "zig-out/save.svg");
     std.debug.print("wrote zig-out/save.svg\n", .{});

@@ -11,6 +11,7 @@ pub const svg = @import("svg.zig");
 
 // Geometry re-exports.
 pub const Point = geometry.Point;
+pub const Matrix = geometry.Matrix;
 pub const Line = geometry.Line;
 pub const Triangle = geometry.Triangle;
 pub const Quadrilateral = geometry.Quadrilateral;
@@ -22,7 +23,11 @@ pub const epsilon = geometry.epsilon;
 pub const Color = svg.Color;
 pub const Fill = svg.Fill;
 pub const Stroke = svg.Stroke;
+pub const LineCap = svg.LineCap;
+pub const LineJoin = svg.LineJoin;
 pub const Style = svg.Style;
+pub const TextStyle = svg.TextStyle;
+pub const TextAnchor = svg.TextAnchor;
 pub const Document = svg.Document;
 
 test {

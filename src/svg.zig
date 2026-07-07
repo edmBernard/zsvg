@@ -14,6 +14,7 @@
 //!   from the iteration variable. No forced comptime type argument.
 
 const std = @import("std");
+const math = std.math;
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 
@@ -70,6 +71,11 @@ pub const Color = struct {
         };
     }
 
+    /// Linear interpolation between `a` (t=0) and `b` (t=1).
+    pub fn lerp(a: Color, b: Color, t: f32) Color {
+        return a.scale(1 - t).add(b.scale(t));
+    }
+
     pub fn format(self: Color, writer: *Writer) Writer.Error!void {
         try writer.print("rgb({d},{d},{d})", .{ self.r, self.g, self.b });
     }
@@ -105,10 +111,16 @@ pub const Fill = struct {
     }
 };
 
+pub const LineCap = enum { butt, round, square };
+
+pub const LineJoin = enum { miter, round, bevel };
+
 pub const Stroke = struct {
     color: Color,
     width: f32,
     opacity: f32 = 1,
+    linecap: LineCap = .butt,
+    linejoin: LineJoin = .round,
 
     pub fn init(color: Color, width: f32, opacity: f32) Stroke {
         return .{ .color = color, .width = width, .opacity = opacity };
@@ -127,9 +139,16 @@ pub const Stroke = struct {
     }
 };
 
-/// Optional paint configuration used by `addLine`, `addCircle`, `addShape`
-/// and `addPath`. Both fields default to `null`, so callers can pass only
-/// what they need: `.{ .stroke = ... }`, `.{ .fill = ... }`, or both.
+pub const TextAnchor = enum { start, middle, end };
+
+pub const TextStyle = struct {
+    fill: Fill = .{ .color = .{} },
+    font_size: f32 = 16,
+    font_family: ?[]const u8 = null,
+    anchor: TextAnchor = .start,
+};
+
+/// Optional paint configuration for shapes
 pub const Style = struct {
     fill: ?Fill = null,
     stroke: ?Stroke = null,
@@ -153,8 +172,29 @@ fn isPointCollectionType(comptime T: type) bool {
     };
 }
 
+/// SVG requires finite coordinates: a `nan`/`inf` (e.g. from a divide-by-zero
+/// during a transform) would emit markup that parsers reject. Catch it at the
+/// source in debug/safe builds.
+fn assertFinitePoints(points: []const Point) void {
+    for (points) |p| {
+        std.debug.assert(math.isFinite(p.x) and math.isFinite(p.y));
+    }
+}
+
+/// Write text content with the three XML metacharacters escaped, so arbitrary
+/// caller strings can't produce malformed markup.
+fn writeEscapedText(writer: *Writer, text: []const u8) Writer.Error!void {
+    for (text) |ch| switch (ch) {
+        '&' => try writer.writeAll("&amp;"),
+        '<' => try writer.writeAll("&lt;"),
+        '>' => try writer.writeAll("&gt;"),
+        else => try writer.writeByte(ch),
+    };
+}
+
 fn writeClosedPointPath(writer: *Writer, points: []const Point) Writer.Error!void {
     if (points.len == 0) return;
+    assertFinitePoints(points);
 
     try writer.print("M {d} {d}", .{ points[0].x, points[0].y });
     for (points[1..]) |point| {
@@ -184,24 +224,28 @@ fn writeShapePath(writer: *Writer, shape: anytype) Writer.Error!void {
     switch (T) {
         Line => {
             const v = shape.vertices;
+            assertFinitePoints(&v);
             try writer.print("M {d} {d} L {d} {d}", .{
                 v[0].x, v[0].y, v[1].x, v[1].y,
             });
         },
         Triangle => {
             const v = shape.vertices;
+            assertFinitePoints(&v);
             try writer.print("M {d} {d} L {d} {d} L {d} {d} Z", .{
-                v[2].x, v[2].y, v[0].x, v[0].y, v[1].x, v[1].y,
+                v[0].x, v[0].y, v[1].x, v[1].y, v[2].x, v[2].y,
             });
         },
         Quadrilateral => {
             const v = shape.vertices;
+            assertFinitePoints(&v);
             try writer.print("M {d} {d} L {d} {d} L {d} {d} L {d} {d} Z", .{
-                v[0].x, v[0].y, v[1].x, v[1].y, v[3].x, v[3].y, v[2].x, v[2].y,
+                v[0].x, v[0].y, v[1].x, v[1].y, v[2].x, v[2].y, v[3].x, v[3].y,
             });
         },
         Bezier => {
             const p = shape.points;
+            assertFinitePoints(&p);
             try writer.print("M {d} {d} C {d} {d}, {d} {d}, {d} {d}", .{
                 p[0].x, p[0].y, p[1].x, p[1].y, p[2].x, p[2].y, p[3].x, p[3].y,
             });
@@ -218,9 +262,7 @@ fn writeShapePath(writer: *Writer, shape: anytype) Writer.Error!void {
 
 fn writeFillStyle(writer: *Writer, fill: ?Fill) Writer.Error!void {
     if (fill) |f| {
-        try writer.print("fill:rgb({d},{d},{d});fill-opacity:{d}", .{
-            f.color.r, f.color.g, f.color.b, f.opacity,
-        });
+        try writer.print("fill:{f};fill-opacity:{d}", .{ f.color, f.opacity });
     } else {
         try writer.writeAll("fill:none");
     }
@@ -229,10 +271,18 @@ fn writeFillStyle(writer: *Writer, fill: ?Fill) Writer.Error!void {
 fn writeStrokeStyle(writer: *Writer, stroke: ?Stroke) Writer.Error!void {
     if (stroke) |s| {
         try writer.print(
-            "stroke:rgb({d},{d},{d});stroke-width:{d};stroke-opacity:{d};stroke-linecap:butt;stroke-linejoin:round",
-            .{ s.color.r, s.color.g, s.color.b, s.width, s.opacity },
+            "stroke:{f};stroke-width:{d};stroke-opacity:{d};stroke-linecap:{t};stroke-linejoin:{t}",
+            .{ s.color, s.width, s.opacity, s.linecap, s.linejoin },
         );
     }
+}
+
+/// Write a `fill:…;stroke:…` declaration block. When `stroke` is null only the
+/// fill clause is emitted (plus a trailing `;`).
+fn writeStyle(writer: *Writer, style: Style) Writer.Error!void {
+    try writeFillStyle(writer, style.fill);
+    try writer.writeByte(';');
+    try writeStrokeStyle(writer, style.stroke);
 }
 
 // -----------------------------------------------------------------------------
@@ -241,14 +291,16 @@ fn writeStrokeStyle(writer: *Writer, stroke: ?Stroke) Writer.Error!void {
 pub const Document = struct {
     canvas_width: u32,
     canvas_height: u32,
-    background: Color,
+    /// Background paint. `null` leaves the canvas transparent (no backdrop
+    /// `<rect>` is emitted).
+    background: ?Color,
     content: Writer.Allocating,
 
     pub fn init(
         allocator: Allocator,
         canvas_width: u32,
         canvas_height: u32,
-        background: Color,
+        background: ?Color,
     ) Document {
         return .{
             .canvas_width = canvas_width,
@@ -270,11 +322,13 @@ pub const Document = struct {
             "<svg xmlns='http://www.w3.org/2000/svg' height='{d}' width='{d}' viewBox='0 0 {d} {d}'>\n",
             .{ self.canvas_height, self.canvas_width, self.canvas_width, self.canvas_height },
         );
-        try writer.print(
-            "<rect height='100%' width='100%' fill='rgb({d},{d},{d})'/>\n",
-            .{ self.background.r, self.background.g, self.background.b },
-        );
-        try writer.writeAll("<g id='surface1'>\n");
+        if (self.background) |bg| {
+            try writer.print(
+                "<rect height='100%' width='100%' fill='{f}'/>\n",
+                .{bg},
+            );
+        }
+        try writer.writeAll("<g>\n");
         try writer.writeAll(self.content.writer.buffered());
         try writer.writeAll("</g>\n</svg>\n");
     }
@@ -310,49 +364,50 @@ pub const Document = struct {
     }
 
     pub fn addCircle(self: *Document, circle: Circle, style: Style) Writer.Error!void {
+        assertFinitePoints(&.{circle.center});
+        std.debug.assert(math.isFinite(circle.radius));
         const writer = &self.content.writer;
         try writer.writeAll("<circle style='");
-        try writeFillStyle(writer, style.fill);
-        try writer.writeByte(';');
-        try writeStrokeStyle(writer, style.stroke);
+        try writeStyle(writer, style);
         try writer.print("' cx='{d}' cy='{d}' r='{d}' />\n", .{
             circle.center.x, circle.center.y, circle.radius,
         });
     }
 
+    /// Add a single `Line`. Named convenience wrapper over `addShape`.
     pub fn addLine(self: *Document, line: Line, style: Style) Writer.Error!void {
         try self.writeSingleShape(line, style);
     }
 
-    /// Add a single `Triangle`, `Quadrilateral`, `Line`, or `Bezier` as a
-    /// `<path>`. For `Bezier` the caller is probably better served by
-    /// `addBezier`, which defaults `fill` to `none`.
+    /// Add a single `Line`, `Triangle`, `Quadrilateral`, or `Bezier`.
     pub fn addShape(self: *Document, shape: anytype, style: Style) Writer.Error!void {
         try self.writeSingleShape(shape, style);
     }
 
-    pub fn addBezier(self: *Document, bezier: Bezier, stroke: Stroke) Writer.Error!void {
-        const writer = &self.content.writer;
-        try writer.writeAll("<path style='fill:none;");
-        try writeStrokeStyle(writer, stroke);
-        try writer.writeAll("' d='");
-        try writeShapePath(writer, bezier);
-        try writer.writeAll("'></path>\n");
+    /// Add a single cubic `Bezier`. Named convenience wrapper over `addShape`.
+    pub fn addBezier(self: *Document, bezier: Bezier, style: Style) Writer.Error!void {
+        try self.writeSingleShape(bezier, style);
     }
 
     pub fn addText(
         self: *Document,
         text: []const u8,
         position: Point,
-        color: Fill,
+        style: TextStyle,
     ) Writer.Error!void {
-        try self.content.writer.print(
-            "<text style='fill:rgb({d},{d},{d});fill-opacity:{d}' x='{d}' y='{d}' font-size='0.5em' dy='0.25em'>{s}</text>\n",
-            .{
-                color.color.r, color.color.g, color.color.b, color.opacity,
-                position.x,    position.y,    text,
-            },
+        assertFinitePoints(&.{position});
+        const writer = &self.content.writer;
+        const f = style.fill;
+        try writer.print(
+            "<text style='fill:{f};fill-opacity:{d};text-anchor:{t}' x='{d}' y='{d}' font-size='{d}'",
+            .{ f.color, f.opacity, style.anchor, position.x, position.y, style.font_size },
         );
+        if (style.font_family) |family| {
+            try writer.print(" font-family='{s}'", .{family});
+        }
+        try writer.writeByte('>');
+        try writeEscapedText(writer, text);
+        try writer.writeAll("</text>\n");
     }
 
     /// Render a collection of shapes as a single `<path>`. `shapes` is any
@@ -362,10 +417,8 @@ pub const Document = struct {
     pub fn addPath(self: *Document, shapes: anytype, style: Style) Writer.Error!void {
         const writer = &self.content.writer;
         try writer.writeAll("<path style='");
-        try writeFillStyle(writer, style.fill);
-        try writer.writeByte(';');
-        try writeStrokeStyle(writer, style.stroke);
-        try writer.writeAll(";stroke-linecap:round' d='");
+        try writeStyle(writer, style);
+        try writer.writeAll("' d='");
 
         var first = true;
         for (shapes) |elem| {
@@ -385,10 +438,8 @@ pub const Document = struct {
     ) Writer.Error!void {
         const writer = &self.content.writer;
         try writer.writeAll("<path style='");
-        try writeFillStyle(writer, style.fill);
-        try writer.writeByte(';');
-        try writeStrokeStyle(writer, style.stroke);
-        try writer.writeAll(";stroke-linecap:round' d='");
+        try writeStyle(writer, style);
+        try writer.writeAll("' d='");
         try writeShapePath(writer, shape);
         try writer.writeAll("'></path>\n");
     }
@@ -448,6 +499,18 @@ test "Document empty renders valid skeleton" {
     try testing.expect(std.mem.indexOf(u8, svg, "rgb(17,34,51)") != null);
 }
 
+test "Document with null background emits no backdrop rect" {
+    var doc: Document = .init(testing.allocator, 100, 80, null);
+    defer doc.deinit();
+
+    const svg = try doc.toOwnedString(testing.allocator);
+    defer testing.allocator.free(svg);
+
+    try testing.expect(std.mem.startsWith(u8, svg, "<svg"));
+    try testing.expect(std.mem.endsWith(u8, svg, "</svg>\n"));
+    try testing.expect(std.mem.indexOf(u8, svg, "<rect") == null);
+}
+
 test "Document addCircle embeds radius and center" {
     var doc: Document = .init(testing.allocator, 100, 100, .rgb(0, 0, 0));
     defer doc.deinit();
@@ -488,7 +551,7 @@ test "Document addBezier has fill:none" {
             .{ .x = 0, .y = 0 },   .{ .x = 10, .y = 10 },
             .{ .x = 20, .y = 10 }, .{ .x = 30, .y = 0 },
         } },
-        .solidHex(0x00FF00, 2),
+        .{ .stroke = .solidHex(0x00FF00, 2) },
     );
 
     const svg = try doc.toOwnedString(testing.allocator);
@@ -523,9 +586,9 @@ test "Document addShape works for Triangle" {
 
     const svg = try doc.toOwnedString(testing.allocator);
     defer testing.allocator.free(svg);
-    try testing.expect(std.mem.indexOf(u8, svg, "M 5 10 L 0 0 L 10 0 Z") != null);
+    // Vertices are emitted in the order given (no implicit reordering).
+    try testing.expect(std.mem.indexOf(u8, svg, "M 0 0 L 10 0 L 5 10 Z") != null);
 }
-
 
 test "Document addShape works for point arrays" {
     var doc: Document = .init(testing.allocator, 100, 100, .rgb(0, 0, 0));
@@ -579,6 +642,91 @@ test "Document writeTo matches toOwnedString" {
     defer testing.allocator.free(owned);
 
     try testing.expectEqualStrings(owned, sink.written());
+}
+
+test "Color lerp interpolates endpoints" {
+    const a = Color.rgb(0, 0, 0);
+    const b = Color.rgb(100, 200, 40);
+    try testing.expectEqualDeep(a, Color.lerp(a, b, 0));
+    try testing.expectEqualDeep(b, Color.lerp(a, b, 1));
+    const mid = Color.lerp(a, b, 0.5);
+    try testing.expectEqual(@as(u8, 50), mid.r);
+    try testing.expectEqual(@as(u8, 100), mid.g);
+    try testing.expectEqual(@as(u8, 20), mid.b);
+}
+
+test "addText escapes XML metacharacters" {
+    var doc: Document = .init(testing.allocator, 100, 100, .rgb(0, 0, 0));
+    defer doc.deinit();
+
+    try doc.addText("a & b < c > d", .{ .x = 0, .y = 0 }, .{ .fill = .solidHex(0xffffff) });
+
+    const svg = try doc.toOwnedString(testing.allocator);
+    defer testing.allocator.free(svg);
+    try testing.expect(std.mem.indexOf(u8, svg, "a &amp; b &lt; c &gt; d") != null);
+    // The raw metacharacters must not survive in the text body.
+    try testing.expect(std.mem.indexOf(u8, svg, "& b") == null);
+}
+
+test "addText honors font_size, family and anchor" {
+    var doc: Document = .init(testing.allocator, 100, 100, .rgb(0, 0, 0));
+    defer doc.deinit();
+
+    try doc.addText("hi", .{ .x = 10, .y = 20 }, .{
+        .fill = .solidHex(0x112233),
+        .font_size = 24,
+        .font_family = "sans-serif",
+        .anchor = .middle,
+    });
+
+    const svg = try doc.toOwnedString(testing.allocator);
+    defer testing.allocator.free(svg);
+    try testing.expect(std.mem.indexOf(u8, svg, "font-size='24'") != null);
+    try testing.expect(std.mem.indexOf(u8, svg, "font-family='sans-serif'") != null);
+    try testing.expect(std.mem.indexOf(u8, svg, "text-anchor:middle") != null);
+}
+
+test "addText defaults to opaque black fill" {
+    var doc: Document = .init(testing.allocator, 100, 100, .rgb(0, 0, 0));
+    defer doc.deinit();
+
+    try doc.addText("hi", .{ .x = 0, .y = 0 }, .{});
+
+    const svg = try doc.toOwnedString(testing.allocator);
+    defer testing.allocator.free(svg);
+    try testing.expect(std.mem.indexOf(u8, svg, "fill:rgb(0,0,0)") != null);
+    try testing.expect(std.mem.indexOf(u8, svg, "fill-opacity:1") != null);
+}
+
+test "Stroke linecap and linejoin are configurable" {
+    var doc: Document = .init(testing.allocator, 100, 100, .rgb(0, 0, 0));
+    defer doc.deinit();
+
+    try doc.addLine(
+        .{ .vertices = .{ .{ .x = 0, .y = 0 }, .{ .x = 10, .y = 0 } } },
+        .{ .stroke = .{ .color = .rgb(0, 0, 0), .width = 2, .linecap = .square, .linejoin = .bevel } },
+    );
+
+    const svg = try doc.toOwnedString(testing.allocator);
+    defer testing.allocator.free(svg);
+    try testing.expect(std.mem.indexOf(u8, svg, "stroke-linecap:square") != null);
+    try testing.expect(std.mem.indexOf(u8, svg, "stroke-linejoin:bevel") != null);
+    // No duplicate linecap declaration is appended.
+    try testing.expect(std.mem.indexOf(u8, svg, "stroke-linecap:round") == null);
+}
+
+test "fill-only path has no empty style clauses" {
+    var doc: Document = .init(testing.allocator, 100, 100, .rgb(0, 0, 0));
+    defer doc.deinit();
+
+    const tri: Triangle = .{ .vertices = .{
+        .{ .x = 0, .y = 0 }, .{ .x = 10, .y = 0 }, .{ .x = 5, .y = 10 },
+    } };
+    try doc.addShape(tri, .{ .fill = .solidHex(0xFF0000) });
+
+    const svg = try doc.toOwnedString(testing.allocator);
+    defer testing.allocator.free(svg);
+    try testing.expect(std.mem.indexOf(u8, svg, ";;") == null);
 }
 
 test "Document save round-trips through disk" {
