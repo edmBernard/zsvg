@@ -4,7 +4,7 @@ A small Zig library for composing 2D geometry primitives and emitting SVG.
 
 ## Requirements
 
-- Zig **0.16.0**
+- Zig **0.17.0**
 
 No external dependencies — everything is built on `std`.
 
